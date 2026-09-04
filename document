@@ -213,4 +213,478 @@ here user_idis the foreign key, which will connect table 1 and table 2
 
 
 
+# AWS RDS MySQL – DevOps Troubleshooting Commands
+
+## 1. Test RDS DNS Resolution
+
+From the EC2 instance:
+
+```bash
+nslookup <RDS-ENDPOINT>
+```
+
+Alternative:
+
+```bash
+dig <RDS-ENDPOINT>
+```
+
+### Purpose
+
+Checks whether the EC2 instance can resolve the RDS endpoint to an IP address.
+
+---
+
+## 2. Test RDS Port Connectivity
+
+For MySQL, the default port is **3306**.
+
+```bash
+nc -zv <RDS-ENDPOINT> 3306
+```
+
+### Purpose
+
+Checks whether EC2 can reach the RDS endpoint on port 3306.
+
+---
+
+## 3. Connect to RDS MySQL
+
+```bash
+mysql -h <RDS-ENDPOINT> -P 3306 -u <USERNAME> -p
+```
+
+Example:
+
+```bash
+mysql -h mydb.xxxxxxxxx.us-east-1.rds.amazonaws.com -P 3306 -u admin -p
+```
+
+---
+
+# RDS Status Troubleshooting
+
+## 4. Check RDS Status
+
+```bash
+aws rds describe-db-instances \
+  --db-instance-identifier <RDS-IDENTIFIER> \
+  --query 'DBInstances[0].DBInstanceStatus' \
+  --output text
+```
+
+Expected:
+
+```text
+available
+```
+
+### Important statuses
+
+```text
+available
+creating
+modifying
+backing-up
+rebooting
+maintenance
+failed
+storage-full
+```
+
+---
+
+# Network Troubleshooting
+
+## 5. Check EC2 VPC, Subnet and Private IP
+
+```bash
+aws ec2 describe-instances \
+  --instance-ids <EC2-INSTANCE-ID> \
+  --query 'Reservations[0].Instances[0].[VpcId,SubnetId,PrivateIpAddress]' \
+  --output table
+```
+
+### Purpose
+
+Identifies:
+
+* VPC
+* Subnet
+* EC2 private IP
+
+---
+
+## 6. Check RDS VPC and Subnets
+
+```bash
+aws rds describe-db-instances \
+  --db-instance-identifier <RDS-IDENTIFIER> \
+  --query 'DBInstances[0].[DBSubnetGroup.VpcId,DBSubnetGroup.Subnets[*].SubnetIdentifier]' \
+  --output json
+```
+
+### Purpose
+
+Confirms which VPC and subnets are being used by RDS.
+
+---
+
+# MySQL Connection Troubleshooting
+
+## 7. Check Current Connections
+
+Inside MySQL:
+
+```sql
+SHOW STATUS LIKE 'Threads_connected';
+```
+
+Example:
+
+```text
+Threads_connected = 25
+```
+
+This tells you approximately how many client connections are currently connected.
+
+---
+
+## 8. Check Maximum Allowed Connections
+
+```sql
+SHOW VARIABLES LIKE 'max_connections';
+```
+
+Example:
+
+```text
+max_connections = 100
+```
+
+Compare:
+
+```text
+Current connections = 25
+Maximum connections = 100
+```
+
+---
+
+## 9. Check Currently Running Threads
+
+```sql
+SHOW STATUS LIKE 'Threads_running';
+```
+
+This shows threads that are currently executing rather than simply connected.
+
+---
+
+## 10. View Active Connections / Queries
+
+```sql
+SHOW PROCESSLIST;
+```
+
+For more detail:
+
+```sql
+SHOW FULL PROCESSLIST;
+```
+
+You can also use:
+
+```sql
+SELECT *
+FROM information_schema.PROCESSLIST;
+```
+
+---
+
+## 11. Find Non-Sleeping Queries
+
+```sql
+SELECT *
+FROM information_schema.PROCESSLIST
+WHERE COMMAND <> 'Sleep';
+```
+
+### Useful things to investigate
+
+Look at:
+
+* `Id`
+* `User`
+* `Host`
+* `db`
+* `Command`
+* `Time`
+* `State`
+* `Info`
+
+---
+
+# Terminating Queries
+
+## 12. Stop Only the Current Query
+
+If the problematic process ID is `31`:
+
+```sql
+KILL QUERY 31;
+```
+
+This attempts to stop the query while keeping the connection/session.
+
+---
+
+## 13. Terminate the Entire Connection
+
+```sql
+KILL CONNECTION 31;
+```
+
+or:
+
+```sql
+KILL 31;
+```
+
+This terminates the MySQL session.
+
+### ⚠️ Important
+
+Never randomly kill database connections.
+
+First:
+
+```sql
+SHOW FULL PROCESSLIST;
+```
+
+Then identify the correct process and understand what it is doing.
+
+---
+
+# Connection Limit Troubleshooting
+
+## 14. Check Current vs Maximum Connections
+
+```sql
+SHOW STATUS LIKE 'Threads_connected';
+
+SHOW VARIABLES LIKE 'max_connections';
+```
+
+Think:
+
+```text
+Current connections
+        ↓
+Compare with
+        ↓
+max_connections
+```
+
+If the current connections are approaching the maximum, investigate:
+
+* Application connection pool
+* Number of application instances
+* Connection leaks
+* Connections not being closed
+* Traffic spikes
+* Long-running queries
+
+---
+
+# RDS Performance Troubleshooting
+
+For CPU, memory, storage and database performance, use:
+
+**AWS Console → RDS → Database → Monitoring**
+
+Important metrics include:
+
+```text
+CPUUtilization
+FreeableMemory
+FreeStorageSpace
+DatabaseConnections
+ReadIOPS
+WriteIOPS
+ReadLatency
+WriteLatency
+```
+
+CloudWatch can be used for longer-term monitoring and alarms.
+
+---
+
+# Connection Error Interpretation
+
+## Connection Timeout
+
+```text
+Connection timed out
+```
+
+Usually investigate:
+
+```text
+Security Group
+     ↓
+Network ACL
+     ↓
+Route / Network
+     ↓
+Subnet
+     ↓
+RDS availability
+```
+
+Think:
+
+**"The connection isn't successfully reaching the destination."**
+
+---
+
+## Connection Refused
+
+```text
+Connection refused
+```
+
+Think:
+
+**"The destination was reached, but the connection was rejected."**
+
+Investigate the service/port/listening state and database availability.
+
+---
+
+# DNS Troubleshooting
+
+```bash
+nslookup <RDS-ENDPOINT>
+```
+
+or:
+
+```bash
+dig <RDS-ENDPOINT>
+```
+
+If the endpoint resolves successfully, DNS is working.
+
+Remember:
+
+```text
+Application
+     ↓
+RDS DNS Endpoint
+     ↓
+AWS-managed IP
+     ↓
+RDS
+```
+
+Don't hard-code the RDS IP address in the application.
+
+---
+
+# RDS Backup & Restore – Basic Commands
+
+List RDS snapshots:
+
+```bash
+aws rds describe-db-snapshots \
+  --db-instance-identifier <RDS-IDENTIFIER>
+```
+
+Create a manual snapshot:
+
+```bash
+aws rds create-db-snapshot \
+  --db-instance-identifier <RDS-IDENTIFIER> \
+  --db-snapshot-identifier <SNAPSHOT-NAME>
+```
+
+Check snapshot status:
+
+```bash
+aws rds describe-db-snapshots \
+  --db-snapshot-identifier <SNAPSHOT-NAME> \
+  --query 'DBSnapshots[0].Status' \
+  --output text
+```
+
+---
+
+# ⭐ Final RDS Troubleshooting Flow
+
+When an application cannot connect to RDS:
+
+```text
+Application cannot connect
+          ↓
+1. Is RDS Available?
+          ↓
+2. Can DNS resolve the endpoint?
+          ↓
+3. Can EC2 reach port 3306?
+          ↓
+4. Check Security Group
+          ↓
+5. Check subnet / routing
+          ↓
+6. Check username/password
+          ↓
+7. Check DatabaseConnections
+          ↓
+8. Check max_connections
+          ↓
+9. SHOW FULL PROCESSLIST
+          ↓
+10. Investigate long-running queries
+          ↓
+11. Check CPU / Memory / Storage
+          ↓
+12. Check CloudWatch / RDS logs
+          ↓
+13. Check backup / restore if required
+```
+
+## Commands to Remember Most
+
+```bash
+nslookup <RDS-ENDPOINT>
+
+nc -zv <RDS-ENDPOINT> 3306
+
+mysql -h <RDS-ENDPOINT> -P 3306 -u <USERNAME> -p
+```
+
+```sql
+SHOW STATUS LIKE 'Threads_connected';
+
+SHOW STATUS LIKE 'Threads_running';
+
+SHOW VARIABLES LIKE 'max_connections';
+
+SHOW FULL PROCESSLIST;
+
+KILL QUERY <ID>;
+
+KILL CONNECTION <ID>;
+```
+
+### DevOps takeaway
+
+You don't need to become a DBA.
+
+You need to be able to:
+
+**identify the symptom → collect evidence → find the layer causing the problem → fix or escalate the root cause.**
 
